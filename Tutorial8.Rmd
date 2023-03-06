@@ -1,0 +1,226 @@
+---
+title: "Tutorial8_Metabarcoding"
+author: "Cameron Forsyth"
+date: "2023-03-06"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(ape)
+library(ggtree)
+install.packages("vegan")
+library(vegan)
+```
+
+# Meta-analysis data of plant microbiome studies using 16S metabarcodes from Github downloaded
+# The data is essentially an index that links a specific sample code to the species it was taken from 
+
+```{r}
+Samples<-read.csv("/Users/Cameron/Documents/Queens/4th Year/Sem2/BIOL432/Week8/Week8/data/SampleInfo.csv")
+```
+
+#1.5 OTU Table
+
+# An OTU is an Operational Taxonomic Unit. Term comes from the fact that sequences do not always map 1:1 with species, especially at the microbial level. Biological species concept often doesn't make sense at the level of bacteria. An OTY is a group of related sequences. In modern microbiome studies, it is common to use ASV or Amplicaon Sequence Variant, which is similar to an OTU except that an OTU may contain multiple sequences whereas an ASV is a unique sequence. 
+
+# For example, two 16S rRNA gene sequences tha differ by a singel base pair may be lumped into the same OTU but would be considered separate ASVs. 
+
+```{r}
+OTU_table<-read.delim("/Users/Cameron/Documents/Queens/4th Year/Sem2/BIOL432/Week8/Week8/data/OTU_table_QIIME1.txt", header=T, row.names="OTU_ID")
+```
+
+# We used header=T, which sets the first row as column names. Also use row.names=OTU_ID which sets column names to the values in the column called OTU_ID.
+
+# This is a simple tab-delimited data table. Imported with read.delim function, which translates tab character \t into columns.
+
+# 1.5.1 Parse table
+
+```{r}
+head(OTU_table)
+```
+# First column contains OTU_ID - unique ID number assigned to each OTU. 
+# Next column start with SRR. Individual samples that were sequenced. Each SRR column corresponds to teh number of sequences for the OTU that were present in that sample.
+# Last column is called taxonomy and ccontains predicted taxonomic assignment for each OTU. Let's remove these so that we aren't mixing nnumeric and character data. 
+
+```{r}
+OTU_data<-OTU_table[,-ncol(OTU_table)]
+```
+
+# Now we have a community matrix with each species as a row and each sample as a column
+
+```{r}
+dim(OTU_data)
+```
+
+# Remove errors
+
+#How many total sequences in the dataset (A:Sum of all the cells of the dataset.)
+```{r}
+X<-rowSums(OTU_data)
+sum(X)
+```
+
+# With >18,000,000 reads (individual sequences) we are bound to get some reads that are just sequencing errors. To reduce the dataset slightly we can remove any OTUs that dont't have more than one sequence in more than one sample:
+
+```{r}
+Drop<-rowSums(OTU_data) < 2
+sum(Drop)
+max(Drop)
+```
+
+# We chose 2 as an arbitrary number. Data comes from Illumina, which has an error rate of 1 in 1000. Odds of getting the exact same mutation twice is on the order of 1 in 1 million sequences.
+# Most common OTU is much less than 1 millin reads, so it is unlikely that any OTU would have the same mutation occurring at the same position in two different reads. However, several OTUs have ore than 1,000 reads so we expect it will be fairly common to find single OTUs that are produced by sequencing error. 
+
+# Dropping singleton OTUs results in removal of almost 4,000 OTUs to simplify the analysis. 
+
+# Q: is this an OTU table or an ASV table?
+# A: It is both. CAlled OTU for consistency with the original dataset and R. but eahc sequence variant gets its own OTU category, so it is an ASV table. 
+
+```{r}
+OTU_red<-OTU_data[!Drop,]
+```
+
+# 1.5.3 Table transpose
+
+# To analyze OTU table, we need to rearrange with the species across the top and sample sizes along the bottom. A simple way to do this with the transpose function t(). It's a big file so let's just do first 3 rows and columns to see what happens.
+
+```{r}
+OTU_red[1:3,1:3]
+
+t(OTU_red[1:3,1:3])
+
+```
+# This looks good, so we do it for the whole dataset
+```{r}
+OTUs<-as.data.frame(t(OTU_red))
+```
+
+# 1.6 Analysis
+
+We can calculate pariwise distance among our samples to create a distance matrix
+
+# 1.6.1 Bianry Distance Matrix
+
+# We can change our OTUs dataframe into binary data by changing the read counts in each square to 1 or 0. 
+# Transform to 1 if # reads >=1 and 0 otherwise. We could use nested loop through each row and each column. May take a long time so might want to skip but look at code.
+
+```{r}
+"OTU_bin<-OTUs
+for (i in 1:nrow(OTU_bin)){
+  for(j in 1:ncol(OTU_bin)){
+    if(OTU_bin[i,j]>0){
+      OTU_bin[i,j]<-1
+    }
+  }
+}"
+```
+
+#Since we are working with a numeric.dataframe (i.e. all data in rows and columns are numeric), there is a nice shortcut:
+
+```{r}
+X<-OTUs[1:3,1:3]
+X
+
+X[X>0]<-100
+X
+```
+# This won't work with most data frames, because data frames often contain heterogenous data. Now we apply it to the full dataset to create a binary matrix:
+
+```{r}
+OTU_bin<-OTUs
+OTU_bin[OTU_bin>0]<-1
+```
+
+```{r}
+dim(OTUs)
+
+nrow(OTUs)*ncol(OTUs)
+```
+
+We can calculate the pariwise distance of this binary matrix
+```{r}
+OTU_bin_dist<-dist(OTU_bin, method='binary')
+```
+
+# What will our matrix size be? How many elements
+We are comparing the sites (rows), so:
+```{r}
+nrow(OTU_bin)
+nrow(OTU_bin) * nrow(OTU_bin)
+```
+
+# 1.6.2 Neighbour-Joining
+Just as we did with our Dragon Phylogeny, we can cluster our samples by their similarity. For example, we can use the neighbor-joining method:
+
+```{r}
+library(ape)
+library(ggtree)
+OTU_tree<-nj(OTU_bin_dist)
+ggtree(OTU_tree, layout="rectangular")
+```
+# This is not a phylogeny - a phylogeny shows a hypothesis about evolutionary relationships among organisms. This is a neighbourhood joining tree that clusters samples based on the similarity of their microbes.
+
+# To see if species clsuter together, we can colour-code and annotate our tree using our Samples data.frame object.
+
+```{r}
+ggtree(OTU_tree, layout="rectangular") %<+% Samples +
+  geom_tiplab(aes(colour=Species)) +
+  theme(legend.position="right")
+```
+# 1.6.3 Bray-Curtis dissimilarity
+
+# In addition to binary distances, we can include abundance information. In our case 'abundance' is inferred from the number of sequence reads - the idea being that the more abundant a bacterial species is in the sample, the more likely it is for its DNA to be sequenced multiple times. 
+
+```{r}
+library(vegan)
+OTU_dist<-vegdist(OTUs, method="bray", binary=F)
+OTU_tree2<-nj(OTU_dist)
+ggtree(OTU_tree2, layout='rectangular') %<+% Samples +
+  geom_tiplab(aes(colour=Species)) +
+  theme(legend.position='right')
+```
+
+# 1.6.4 NMDS (Non-Metric Multidimensional Scaling)
+
+# We can visualize similarity/differences among our samples. The NMDS is a multivariate method that is similar to the PCA and LDA. 
+
+# PCA and LDA are based on eigenvectors calculated as linear combinations of measurements, which are often called features. The features are often standardize to a mean of zero and standard deviation of one, but overall the eigenvectors can be calculated by adding together a linear combination of features. 
+
+# In contrast, Multidimensional Scaling is a type of PCA, which are caclculated from the dissimilarity matrix, rather than the features themselves. In Dragon Phylogeny, we saw two types of distance matrices, which is a symmetrix matrix with individuals as both rows and columns. Each value in a distance matrix shows the distance between teh indiviudals in row i and column j. 
+
+# The dissimilarity matrix is a term that includes distance matrixes but may have other transformationss. All distance matrices are dissimilarity matrices but not all dissimilarity matrices are distance matrices. 
+
+# THe NMDS algorithm tries to represent the dissimilarity matrix in a number of dimensions defined by the user. Typically, the number will be two, which can be used to create a bivariate plot to easily visualize relationships among the samples. Some cases more convenient to use 1 or more dimension than two.
+
+# 2 points that are close together on an NMDS graph have a small dissimilarity value (i.e., they are similar) compared to two points that are farther part.
+
+```{r}
+set.seed(13)
+NMDSdat<-metaMDS(OTU_dist, k=2) # k = 2 dimensions
+```
+# Our model did not converge after 20 runs, we can try increasing this:
+```{r}
+set.seed(13)
+NMDSdat<-metaMDS(OTU_dist, k=2, trymax=100)
+```
+# If it still hasn't converged after 100 iterations, we can try increase trymax to try to get a better solution. Go ahead and try and the compare to the figure below
+
+# Create data for plotting
+```{r}
+PDat<-data.frame(NMDS1=NMDSdat$points[,1],
+                 NMDS2=NMDSdat$points[,2],
+                 SampleID=row.names(OTUs))
+```
+
+# Add special labels using the merge function:
+```{r}
+PDat<-merge(PDat, Samples, by='SampleID', all.x=T, all.y=F)
+```
+
+# And plot:
+```{r}
+qplot(x=NMDS1, y=NMDS2, colour=Species, alpha=I(0.6), data=PDat) +theme_bw()
+```
+
+
